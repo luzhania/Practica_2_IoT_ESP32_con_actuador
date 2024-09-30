@@ -1,6 +1,38 @@
 #include <WiFi.h>
+#include <functional>
 
 #define LED_QUANTITY 3
+
+using namespace std;
+
+class Utilities
+{
+public:
+  static void serialPrintNonBlockingDelay(unsigned long milliseconds, unsigned int cm)
+  {
+    static unsigned long lastMeasurement = 0;
+    unsigned long currentMillis = millis();
+
+    if (currentMillis - lastMeasurement >= milliseconds)
+    {
+      Serial.print(cm);
+      Serial.println("cm");
+      lastMeasurement = currentMillis;
+    }
+  }
+
+  static void NonBlockingDelay(unsigned long milliseconds, function<void()> callback)
+  {
+    static unsigned long lastMeasurement = 0;
+    unsigned long currentMillis = millis();
+
+    if (currentMillis - lastMeasurement >= milliseconds)
+    {
+      callback();
+      lastMeasurement = currentMillis;
+    }
+  }
+};
 
 class Led
 {
@@ -31,22 +63,20 @@ public:
   }
 };
 
-// Definimos la clase ActuatorObserver como parte del patrón Observer
-class ActuatorObserver
+class Observer
 {
 public:
   virtual void update(int state) = 0;
 };
 
-// Adaptamos la clase LedController para manejar los estados y seguir el patrón Observer
-class LedController : public ActuatorObserver
+class LedObserver : public Observer
 {
 private:
   Led usedLeds[LED_QUANTITY];
   unsigned int lastLed = 0;
 
 public:
-  LedController() : lastLed(0) {}
+  LedObserver() : lastLed(0) {}
 
   void addLed(unsigned int pin)
   {
@@ -101,80 +131,112 @@ private:
   }
 };
 
-class TCPClient
+class WiFiConnection
 {
 private:
-  WiFiClient client;
-  const char *ssid = "HUAWEI-2.4G-M6xZ";
-  const char *password = "HT7KU2Xv";
-  const char *host = "192.168.100.11";
-  const int port = 8080;
-  ActuatorObserver *observer;
+  const char *SSID;
+  const char *PASSWORD;
 
+public:
+  WiFiConnection(const char *SSID, const char *PASSWORD)
+      : SSID(SSID), PASSWORD(PASSWORD) {}
+
+  void connect()
+  {
+    WiFi.begin(SSID, PASSWORD);
+    while (WiFi.status() != WL_CONNECTED)
+    {
+      delay(500);
+      Serial.println("Conectando a WiFi...");
+    }
+    Serial.println("Conectado a WiFi");
+  }
+};
+
+const char *SERVER_HOST = "192.168.100.11";
+const unsigned int SERVER_PORT = 8080;
+
+class ActuatorClient
+{
+private:
+  Observer *ledObserver;
+  WiFiClient wifiClient;
+  WiFiConnection *wifiConnection;
   bool isConnected = false;
 
 public:
-  TCPClient(ActuatorObserver *obs) : observer(obs) {}
-
-  void setupWiFi()
+  ActuatorClient(const char *SSID, const char *PASSWORD, Observer *obs) : ledObserver(obs)
   {
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED)
-    {
-      delay(1000);
-      Serial.println("Conectando al WiFi...");
-    }
-    Serial.println("Conectado al WiFi");
+    wifiConnection = new WiFiConnection(SSID, PASSWORD);
   }
 
+  ~ActuatorClient()
+  {
+    delete wifiConnection;
+  }
+
+  void setup()
+  {
+    Serial.begin(115200);
+    wifiConnection->connect();
+  }
+
+  void loop()
+  {
+    if (!isConnected)
+    {
+      Serial.println("Intentando reconectar al servidor...");
+      connectToServer();
+    }
+    else
+    {
+      listenToServer();
+    }
+  }
+
+private:
   void connectToServer()
   {
-    if (!client.connected())
+    if (!wifiClient.connected())
     {
-      if (client.connect(host, port))
+      if (wifiClient.connect(SERVER_HOST, SERVER_PORT))
       {
         Serial.println("Conectado al servidor");
-        client.print("REGISTER ACTUATOR");
+        wifiClient.print("REGISTER ACTUATOR");
         isConnected = true;
       }
       else
       {
         Serial.println("Error al conectar con el servidor");
         isConnected = false;
+        delay(5000);
       }
     }
   }
 
   void listenToServer()
   {
-    if (isConnected && client.connected())
+    if (isConnected && wifiClient.connected())
     {
-      if (client.available())
+      if (wifiClient.available())
       {
-        String response = client.readStringUntil('\n');
+        String response = wifiClient.readStringUntil('\n');
         Serial.print("Recibido del servidor: ");
         Serial.println(response);
         int state = parseServerResponse(response);
-        observer->update(state);
+        ledObserver->update(state);
       }
     }
     else
     {
       isConnected = false;
-      client.stop();
+      wifiClient.stop();
     }
   }
 
-  bool isClientConnected()
-  {
-    return isConnected;
-  }
-
-private:
   int parseServerResponse(const String &response)
   {
     int spaceIndex = response.indexOf(' ');
-
     if (spaceIndex != -1)
     {
       String stateStr = response.substring(spaceIndex + 1);
@@ -184,30 +246,19 @@ private:
   }
 };
 
-LedController ledController;
-TCPClient tcpClient(&ledController);
+LedObserver ledObserver;
+ActuatorClient actuatorClient("HUAWEI-2.4G-M6xZ", "HT7KU2Xv", &ledObserver);
 
 void setup()
 {
-  Serial.begin(115200);
-  tcpClient.setupWiFi();
-
-  ledController.addLed(32);
-  ledController.addLed(33);
-  ledController.addLed(25);
+  ledObserver.addLed(32);
+  ledObserver.addLed(33);
+  ledObserver.addLed(25);
+  actuatorClient.setup();
 }
 
 void loop()
 {
-  if (!tcpClient.isClientConnected())
-  {
-    Serial.println("Intentando reconectar al servidor...");
-    tcpClient.connectToServer();
-    delay(5000);
-  }
-  else
-  {
-    tcpClient.listenToServer();
-  }
-  delay(100);
+  Utilities::NonBlockingDelay(100, []()
+                              { actuatorClient.loop(); });
 }
