@@ -128,6 +128,7 @@ private:
         usedLeds[i].turnOff();
       }
     }
+    
   }
 };
 
@@ -153,7 +154,7 @@ public:
   }
 };
 
-const char *SERVER_HOST = "192.168.100.11";
+const char *SERVER_HOST = "192.168.43.111";
 const unsigned int SERVER_PORT = 8080;
 
 class ActuatorClient
@@ -247,7 +248,7 @@ private:
 };
 
 LedObserver ledObserver;
-ActuatorClient actuatorClient("HUAWEI-2.4G-M6xZ", "HT7KU2Xv", &ledObserver);
+ActuatorClient actuatorClient("Galaxy S9+7c14", "betitox007.,", &ledObserver);
 
 void setup()
 {
